@@ -24,6 +24,7 @@ tracked=(
   ".npmrc"
   ".vimrc"
   ".xinitrc"
+  ".Xresources"
   ".zprofile"
   ".zshrc"
 )
