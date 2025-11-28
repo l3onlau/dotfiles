@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# Base directory for AUR packages
+BASE_DIR=~/Aurs
+MAX_DEPTH=1
+
+# Resolve Tilde (~) to full path
+FULL_BASE_DIR=$(eval echo "$BASE_DIR")
+
+if [ ! -d "$FULL_BASE_DIR" ]; then
+    echo "--- ⚠️ Error: Base directory $FULL_BASE_DIR does not exist. Exiting. ---"
+    exit 1
+fi
+
+# --- Core Functions ---
+
+# Function to run git pull and check for updates
+run_git_pull() {
+    local DIR=$1
+    echo "Running git pull..."
+    
+    # Run git pull and capture its output
+    PULL_OUTPUT=$(git pull 2>&1)
+    
+    # Check if a true update occurred (common messages for an update/change)
+    if echo "$PULL_OUTPUT" | grep -qE "(Updating|changed|file|insertion|deletion)"; then
+        echo -e "✅ Git update detected in $DIR"
+        return 0 # Update occurred
+    else
+        echo -e "☑️ Repository is already up-to-date."
+        return 1 # No update occurred
+    fi
+}
+
+# --- Main Execution ---
+
+echo -e "\n--- Starting AUR Upgrade Process for $BASE_DIR (Depth: $MAX_DEPTH) ---"
+
+# Find directories at the specified depth
+# Targets: ~/Aurs/package_name, ~/Aurs/another_package, etc.
+find "$FULL_BASE_DIR" -mindepth "$MAX_DEPTH" -maxdepth "$MAX_DEPTH" -type d -print0 | while IFS= read -r -d $'\0' DIR; do
+    
+    # 1. Check if it's a Git repository
+    if [ -d "$DIR/.git" ]; then
+        echo -e "\n** Entering $DIR **"
+        
+        if pushd "$DIR" > /dev/null; then
+            
+            # 2. Run git pull and check if an update happened
+            run_git_pull "$DIR"
+            GIT_UPDATED=$? # Capture the return status (0 if updated, 1 otherwise)
+
+            # 3. Run makepkg if an update occurred
+            if [ $GIT_UPDATED -eq 0 ]; then
+                echo -e "\n>>> Running makepkg -sirc --noconfirm --needed..."
+                # -s: sync dependencies, -i: install, -r: remove dependencies, -c: clean up
+                makepkg -sirc --noconfirm --needed
+                MAKPKG_STATUS=$?
+
+                if [ $MAKPKG_STATUS -ne 0 ]; then
+                    echo -e "\n--- ❌ makepkg failed for $DIR! ---"
+                fi
+            fi
+            
+            popd > /dev/null # Go back to the original directory
+        else
+            echo "Warning: Could not enter directory $DIR. Skipping."
+        fi
+    else
+        echo "Skipping $DIR: Not a Git repository."
+    fi
+
+done
+
+echo -e "\n--- Finished ---"

@@ -1,0 +1,256 @@
+#!/bin/bash
+
+# ==============================================================================
+# PREREQUISITES SECTION
+# ==============================================================================
+
+# --- Command ---
+#sudo pacman -S qemu-desktop libvirt edk2-ovmf swtpm samba virt-viewer
+# Download virtio-win in ~/Qemu/Images and change the name. link: https://github.com/virtio-win/virtio-win-pkg-scripts/blob/master/README.md
+
+# --- Explanation ---
+#swtpm: Required for Windows 11 TPM emulation.
+#virtio-win: Contains the ISO for Windows drivers (Storage/Network) required during installation.
+#samba: Required for the QEMU shared folder feature.
+
+# ==============================================================================
+# HOW TO SECTION
+# ==============================================================================
+# --- How To ---
+#1. Launching the VM
+#
+#    Windows: ./launch_vm.sh (Defaults to Windows)
+#
+#    Linux: ./launch_vm.sh linux
+#
+#2. Accessing Shared Folders
+#
+#This script uses QEMU's built-in SMB server (User Mode Networking).
+#
+#In Windows Guest:
+#
+#    Open File Explorer.
+#
+#    Type \\10.0.2.4\qemu in the address bar.
+#
+#    You should see the contents of ~/Shared_Win. Map this as a Network Drive for easy access.
+#
+#In Linux Guest: You need cifs-utils.
+#
+#    Open terminal in the guest.
+#
+#    Run: sudo mount -t cifs //10.0.2.4/qemu /mnt -o user=guest,pass=guest (No password actually required usually, but syntax demands it).
+#
+#3. Windows 11 Installation (Crucial Step)
+#
+#Because we are using VirtIO for best performance (Storage and Network), the standard Windows installer will not see your hard drive initially.
+#
+#    Boot the VM.
+#
+#    When you reach "Where do you want to install Windows?", the list will be empty.
+#
+#    Click Load Driver > Browse.
+#
+#    Navigate to the CD Drive virtio-win (attached by the script).
+#
+#    Go to amd64 -> w11 (or w10) -> viostor (Storage Driver). Select it and install. Now the disk appears.
+#
+#    Repeat the process to install NetKVM (Network driver) so you have internet during setup.
+#
+#4. Performance Notes for your Hardware
+#
+#    CPU: The script uses -cpu host. On your i5-12400F, this passes the P-Core architecture directly.
+#
+#    Graphics: The script attempts to use -device virtio-vga-gl.
+#
+#        Linux: Works out of the box with modern kernels.
+#
+#        Windows: Requires the driver installation from the virtio-win ISO (run virtio-win-guest-tools.exe inside Windows after installation).
+#
+#    Storage: virtio-scsi is used. It supports TRIM (Discard), keeping your host disk usage lower if you delete files in the VM.
+#
+#5. Connectivity
+#
+#    Host accessing VM:
+#
+#        Windows: Connect via RDP (Remote Desktop) to 127.0.0.1:3389.
+#
+#        Linux: SSH to 127.0.0.1:2222.
+#
+#    VM accessing Host: The VM is on a restricted subnet (10.0.2.x). It cannot "ping" your host's LAN IP easily, but it can access the Shared Folder via the gateway 10.0.2.4.
+
+# Shift+10 when in language selection in installation page then key in oobe\bypassnro to bypass network
+# Set-SmbClientConfiguration -RequireSecuritySignature $false for map a network device
+
+# ==============================================================================
+# CONFIGURATION SECTION
+# ==============================================================================
+
+# --- General Paths ---
+BASE_DIR="$HOME/Qemu"
+ISO_DIR="$BASE_DIR/Images"
+VIRTIO_ISO="$ISO_DIR/virtio-win-0.1.285.iso"
+#OVMF_CODE="/usr/share/edk2/x64/OVMF_CODE.4m.fd" # UEFI Firmware Code
+OVMF_CODE="/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd" # UEFI Firmware Code
+OVMF_VARS_TEMPLATE="/usr/share/edk2/x64/OVMF_VARS.4m.fd" # UEFI Settings Template
+
+# --- Hardware Allocation ---
+# 12400F has 6 P-Cores (12 Threads). We give the VM 4 Cores / 8 Threads safely.
+CPU_CORES="4"
+CPU_THREADS="2" 
+CPU_SOCKETS="1"
+TOTAL_CPUS=$((CPU_SOCKETS * CPU_CORES * CPU_THREADS))
+RAM_SIZE="8G" # Adjust as needed
+DISK_SIZE="100G"
+
+# --- Network Configuration ---
+# RESTRICTED_NET: "y" = No internet (only host connection). "n" = NAT Internet access.
+RESTRICTED_NET="n" 
+
+# --- OS Specific Configurations ---
+
+# WINDOWS SETTINGS
+WIN_ISO_NAME="Win11_25H2_English_x64.iso" # Must exist in ~/Qemu/Images
+
+# LINUX SETTINGS
+LIN_ISO_NAME="debian-13.2.0-amd64-netinst.iso" # Must exist in ~/Qemu/Images
+
+PORT_FWD="tcp::13000-:3000"
+#GRAPHICS_OPTS="-device virtio-vga-gl -display gtk,gl=on" # Accel graphics
+GRAPHICS_OPTS="-device virtio-vga"
+
+# ==============================================================================
+# LOGIC BODY
+# ==============================================================================
+
+# 1. Determine Mode (Windows or Linux)
+TARGET_OS=${1:--w} # Default to windows if no arg provided
+TARGET_OS=${TARGET_OS,,} # Convert to lowercase
+
+if [[ "$TARGET_OS" == "-w" ]]; then
+    VM_NAME="Win"
+    ISO_FILE="$ISO_DIR/$WIN_ISO_NAME"
+    OS_VARIANT="win11"
+    # Windows 11 requires TPM 2.0
+    USE_TPM=true
+elif [[ "$TARGET_OS" == "-l" ]]; then
+    VM_NAME="Lin"
+    ISO_FILE="$ISO_DIR/$LIN_ISO_NAME"
+    OS_VARIANT="debian"
+    USE_TPM=false
+else
+    echo "Error: Invalid argument. Use 'windows' or 'linux'."
+    exit 1
+fi
+
+# 2. Directory Setup
+VM_DIR="$BASE_DIR/$VM_NAME"
+SHARED_DIR="$HOME/Shared_$VM_NAME"
+DISK_IMG="$VM_DIR/${VM_NAME}.qcow2"
+VARS_FILE="$VM_DIR/OVMF_VARS.fd"
+TPM_SOCK="$VM_DIR/tpm0.sock"
+
+mkdir -p "$VM_DIR"
+mkdir -p "$SHARED_DIR"
+mkdir -p "$ISO_DIR"
+
+echo "--- Launching QEMU for $VM_NAME ---"
+echo "VM Directory: $VM_DIR"
+echo "Shared Folder: $SHARED_DIR"
+
+# 3. Check if Install Mode is needed
+INSTALL_MODE=false
+if [ ! -f "$DISK_IMG" ]; then
+    echo "Disk not found. Initializing INSTALL MODE..."
+    INSTALL_MODE=true
+    
+    # Create Disk
+    qemu-img create -f qcow2 "$DISK_IMG" "$DISK_SIZE"
+    
+    # Check ISO
+    if [ ! -f "$ISO_FILE" ]; then
+        echo "Error: ISO file not found at $ISO_FILE"
+        echo "Please place your ISO in $ISO_DIR"
+        exit 1
+    fi
+
+    # Copy UEFI Vars for persistence
+    if [ -f "$OVMF_VARS_TEMPLATE" ]; then
+        cp "$OVMF_VARS_TEMPLATE" "$VARS_FILE"
+    else
+        echo "Error: OVMF UEFI Vars not found. Install edk2-ovmf."
+        exit 1
+    fi
+fi
+
+# 4. Prepare Arguments Array
+ARGS=(
+    -name "$VM_NAME"
+    -enable-kvm
+    -machine type=q35,accel=kvm,kernel_irqchip=on
+    -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time
+    -smp "$TOTAL_CPUS",cores="$CPU_CORES",sockets="$CPU_SOCKETS",threads="$CPU_THREADS"
+    -m "$RAM_SIZE"
+    
+    # UEFI Setup
+    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE"
+    -drive if=pflash,format=raw,file="$VARS_FILE"
+    
+    # Hardware Devices (VirtIO for performance)
+    -device virtio-balloon-pci
+    -device virtio-scsi-pci,id=scsi0
+    
+    # Hard Drive (VirtIO SCSI)
+    -device scsi-hd,drive=drive0,bootindex=1
+    -drive if=none,file="$DISK_IMG",id=drive0,format=qcow2,cache=none,discard=unmap,detect-zeroes=unmap
+    
+    # Audio
+    -device intel-hda -device hda-duplex
+    
+    # USB Tablet (Fixes mouse capture issues)
+    -device qemu-xhci -device usb-tablet
+    
+    # Shared Folder (SMB) & Networking
+    # Note: 'restrict=y' isolates guest, but allows SMB logic if configured correctly
+    -netdev user,id=net0,hostfwd="$PORT_FWD",restrict="$RESTRICTED_NET",smb="$SHARED_DIR"
+    -device virtio-net-pci,netdev=net0
+    
+    # Graphics
+    $GRAPHICS_OPTS
+)
+
+# 5. TPM Setup (For Windows 11)
+if [ "$USE_TPM" = true ]; then
+    # Start swtpm in background
+    swtpm socket --tpmstate dir="$VM_DIR" --ctrl type=unixio,path="$TPM_SOCK" --tpm2 -d
+    
+    ARGS+=(
+        -chardev socket,id=chrtpm,path="$TPM_SOCK"
+        -tpmdev emulator,id=tpm0,chardev=chrtpm
+        -device tpm-tis,tpmdev=tpm0
+    )
+fi
+
+# 6. Install Mode Specifics (Attach ISOs)
+if [ "$INSTALL_MODE" = true ]; then
+    # Attach OS ISO
+    ARGS+=(-drive file="$ISO_FILE",media=cdrom,index=2)
+    
+    if [[ "$TARGET_OS" == "-w" ]]; then
+        # Attach VirtIO Drivers ISO (Required to see disk during Win Setup)
+        if [ -f "$VIRTIO_ISO" ]; then
+            ARGS+=(-drive file="$VIRTIO_ISO",media=cdrom,index=3)
+            echo "Info: VirtIO drivers attached. Load drivers from CD-ROM during Windows Setup."
+        else
+            echo "Warning: virtio-win.iso not found at $VIRTIO_ISO. Windows might not see the disk."
+        fi
+    fi
+fi
+
+# 7. Execute
+qemu-system-x86_64 -full-screen "${ARGS[@]}"
+
+# Cleanup TPM on exit
+if [ "$USE_TPM" = true ]; then
+    rm -f "$TPM_SOCK"
+fi

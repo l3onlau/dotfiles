@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Base directory where all the repositories are nested
+BASE_DIR=~/Repos
+# Check if the base directory exists
+if [ ! -d "$BASE_DIR" ]; then
+    echo "Error: Base directory $BASE_DIR does not exist."
+    exit 1
+fi
+
+echo "--- Starting Git Pull for 2nd-Depth Repositories ---"
+
+# Use find to locate directories at the desired depth:
+# -type d: only find directories
+# -mindepth 2: start checking at the 2nd depth level (BASE_DIR is 1, its children are 2, the targets are 2)
+# -maxdepth 2: stop checking after the 2nd depth level
+# -exec: execute a command on each found directory ({})
+find "$BASE_DIR" -mindepth 2 -maxdepth 2 -type d -print0 | while IFS= read -r -d $'\0' DIR; do
+    
+    # 1. Check if it's a Git repository before pulling
+    if [ -d "$DIR/.git" ]; then
+        echo -e "\n** Entering $DIR **"
+        
+        # 2. Change into the directory and run git pull
+        if pushd "$DIR" > /dev/null; then
+            echo "Running git pull..."
+            # Execute git pull and pipe output to /dev/null to keep the script output cleaner
+            git pull
+            popd > /dev/null # Go back to the original directory
+        else
+            echo "Warning: Could not enter directory $DIR. Skipping."
+        fi
+    else
+        echo "Skipping $DIR: Not a Git repository (no .git folder found)."
+    fi
+
+done
+
+echo -e "\n--- Script Finished ---"

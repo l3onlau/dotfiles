@@ -1,0 +1,38 @@
+{
+    "workbench.colorTheme": "Default Light+",
+    "workbench.startupEditor": "none",
+    "vim.easymotion": true,
+    "workbench.secondarySideBar.defaultVisibility": "hidden",
+    "telemetry.telemetryLevel": "off",
+    "telemetry.feedback.enabled": false,
+    "telemetry.editStats.enabled": false,
+    "gitlens.telemetry.enabled": false,
+    "vim.useSystemClipboard": true,
+    "vim.normalModeKeyBindingsNonRecursive": [
+        {
+            "before": [
+                "s"
+            ],
+            "after": [
+                "<leader>",
+                "<leader>",
+                "s"
+            ]
+        }
+    ],
+    "vim.visualModeKeyBindingsNonRecursive": [
+        {
+            "before": [
+                "s"
+            ],
+            "after": [
+                "<leader>",
+                "<leader>",
+                "s"
+            ]
+        }
+    ],
+    "terminal.integrated.sendKeybindingsToShell": true,
+    "explorer.confirmDelete": false,
+    "git.enableSmartCommit": true
+}

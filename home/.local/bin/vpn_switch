@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Script to manage WireGuard VPN services for desktopX interfaces
+# Usage: sudo ./vpn_switch [number|off]
+# Default: 0 (turns on desktop0 and turns off others)
+# "off": turns off all desktopX VPNs
+
+param="${1:-0}"
+
+# Function to send notification on failure
+notify_failure() {
+    notify-send "VPN Error" "$1"
+}
+
+# Validate param
+if [ "$param" != "off" ] && ! [[ "$param" =~ ^[0-9]+$ ]]; then
+    notify_failure "Invalid parameter: $param. Must be a number or 'off'."
+    exit 1
+fi
+
+# Find all running desktopX services
+running_services=$(systemctl list-units --plain | grep -o 'wg-quick@desktop[0-9]*\.service' | sort -u)
+
+# Stop all running desktopX services
+for service in $running_services; do
+    sudo systemctl stop "$service" || notify_failure "Failed to stop $service"
+done
+
+# If not 'off', start the specified one
+if [ "$param" != "off" ]; then
+    target_service="wg-quick@desktop$param.service"
+    sudo systemctl start "$target_service" || notify_failure "Failed to start $target_service"
+fi
