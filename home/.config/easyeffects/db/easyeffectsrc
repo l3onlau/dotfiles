@@ -7,7 +7,8 @@ visiblePlugin=equalizer#0
 [StreamOutputs]
 outputDevice=alsa_output.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo-output
 plugins=equalizer#0,stereo_tools#0
-visiblePlugin=stereo_tools#0
+visiblePage=pluginsPage
+visiblePlugin=equalizer#0
 
 [Window]
 height=1080

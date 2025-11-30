@@ -30,7 +30,7 @@ tracked=(
 )
 
 usage() {
-  echo "Usage: $0 {pull|push}"
+  echo "Usage: $0 {pull|push|diff}"
   exit 1
 }
 
@@ -83,11 +83,30 @@ sync_push() {
   done
 }
 
+sync_diff() {
+  for item in "${tracked[@]}"; do
+    src="$HOME/$item"
+    dest="$HOME_REPO/$item"
+
+    # Only compare if both exist
+    if [[ -e "$src" || -L "$src" ]] && [[ -e "$dest" || -L "$dest" ]]; then
+      echo "=== Diff for $item ==="
+      if [[ -d "$src" && -d "$dest" ]]; then
+        diff -ruN "$dest" "$src" || true
+      else
+        diff -u "$dest" "$src" || true
+      fi
+      echo
+    fi
+  done
+}
+
 # --- Main ---
 [[ $# -ne 1 ]] && usage
 
 case "$1" in
   pull) sync_pull ;;
   push) sync_push ;;
+  diff) sync_diff ;;
   *) usage ;;
 esac

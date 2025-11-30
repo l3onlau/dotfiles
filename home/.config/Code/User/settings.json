@@ -34,5 +34,6 @@
     ],
     "terminal.integrated.sendKeybindingsToShell": true,
     "explorer.confirmDelete": false,
-    "git.enableSmartCommit": true
+    "git.enableSmartCommit": true,
+    "editor.wordWrap": "on",
 }
